@@ -1,7 +1,7 @@
 #!/bin/sh
 
 API_URL="https://api.github.com/repos/shtorm-7/sing-box-extended/releases?per_page=30"
-ARCHIVE_NAME="sing-box-latest"
+ARCHIVE_NAME="sing-box-latest.tar.gz"
 DEST_FILE="/usr/bin/sing-box"
 
 R="\033[1;31m"
@@ -59,7 +59,7 @@ if [ -f "/etc/openwrt_release" ]; then
 fi
 
 case $HOST_ARCH in
-  aarch64)                ARCH_SUFFIX="arm64" ;;
+  aarch64)               ARCH_SUFFIX="arm64" ;;
   armv7*)                 ARCH_SUFFIX="armv7" ;;
   armv6*)                 ARCH_SUFFIX="armv6" ;;
   x86_64)                 ARCH_SUFFIX="amd64" ;;
@@ -112,7 +112,7 @@ printf "  ${Y}0)${N} Отмена\n"
 printf "\n${C}[?] Выберите версию (0-$((i-1))): ${N}"
 read -r choice
 
-if [ "$choice" = "0" ]; then
+if [ "$choice" = "0" ] || [ -z "$choice" ]; then
     printf "${G}[*] Установка отменена.${N}\n"
     exit 0
 fi
@@ -132,6 +132,21 @@ if [ -z "$SELECTED_TAG" ]; then
 fi
 
 SELECTED_VER=$(echo "$SELECTED_TAG" | sed 's/^v//')
+
+# --- НОВЫЙ БЛОК: Выбор типа сборки ---
+printf "\n${C}[?] Выберите тип сборки sing-box extended:${N}\n"
+printf "  ${Y}1)${N} Стандартная (Standard)\n"
+printf "  ${Y}2)${N} Сжатая (Compressed, UPX)\n"
+printf "\n${C}[?] Ваш выбор (1-2, по умолчанию 1): ${N}"
+read -r type_choice
+
+if [ "$type_choice" = "2" ]; then
+    ARCH_SUFX="-compressed"
+    USE_PKG="0" # Сжатые сборки ставим бинарником через tar.gz, так как в ipk/apk их нет
+else
+    ARCH_SUFX=""
+fi
+# -------------------------------------
 
 printf "\n${C}[*] Текущая: ${Y}${CURRENT_VER:-не установлен}${C} | Выбранная: ${Y}${SELECTED_VER}${N}\n"
 
@@ -159,44 +174,25 @@ if [ "$USE_PKG" = "1" ]; then
     fi
 fi
 
-# Поиск tar.gz или compressed-файла
 if [ "$IS_PKG_INSTALL" = "0" ]; then
-    # Сначала ищем .tar.gz
-    TAR_PATTERN="linux-$ARCH_SUFFIX.tar.gz"
+    # Модифицированный паттерн для поддержки суффикса -compressed
+    FILE_PATTERN="linux-$ARCH_SUFFIX${ARCH_SUFX}\.tar.gz"
     DOWNLOAD_URL=$(echo "$RELEASE_RESPONSE" \
       | tr ',' '\n' \
       | grep "browser_download_url" \
-      | grep "$TAR_PATTERN" \
+      | grep "$FILE_PATTERN" \
       | head -n 1 \
       | awk -F '"' '{print $4}')
-    
-    IS_COMPRESSED="0"
-    if [ -z "$DOWNLOAD_URL" ]; then
-        # Не нашли .tar.gz — ищем compressed (бинарник, сжатый gzip)
-        COMPRESSED_PATTERN="linux-$ARCH_SUFFIX.*compressed"
-        DOWNLOAD_URL=$(echo "$RELEASE_RESPONSE" \
-          | tr ',' '\n' \
-          | grep "browser_download_url" \
-          | grep "$COMPRESSED_PATTERN" \
-          | head -n 1 \
-          | awk -F '"' '{print $4}')
-        if [ -n "$DOWNLOAD_URL" ]; then
-            IS_COMPRESSED="1"
-        fi
-    fi
 fi
 
 if [ -z "$DOWNLOAD_URL" ]; then
-    fail "Файл для архитектуры '$HOST_ARCH' ($ARCH_SUFFIX / ${DISTRIB_ARCH:-н/д}) не найден в релизе $SELECTED_TAG."
+    fail "Файл для архитектуры '$HOST_ARCH' ($ARCH_SUFFIX${ARCH_SUFX} / ${DISTRIB_ARCH:-н/д}) не найден в релизе $SELECTED_TAG."
 fi
 
-# Определяем имя сохраняемого файла
 if [ "$IS_PKG_INSTALL" = "1" ]; then
     ARCHIVE_NAME="sing-box-latest.${PKG_EXT}"
-elif [ "$IS_COMPRESSED" = "0" ]; then
-    ARCHIVE_NAME="sing-box-latest.tar.gz"
 else
-    ARCHIVE_NAME="sing-box-latest.gz"
+    ARCHIVE_NAME="sing-box-latest.tar.gz"
 fi
 
 sync
@@ -286,7 +282,6 @@ sync
 echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 
 if [ "$IS_PKG_INSTALL" = "1" ]; then
-    # Установка пакета opkg/apk
     if [ "$PKG_MANAGER" = "apk" ]; then
         apk del sing-box >/dev/null 2>&1 || true
         apk del sing-box-extended >/dev/null 2>&1 || true
@@ -313,26 +308,12 @@ if [ "$IS_PKG_INSTALL" = "1" ]; then
         service sing-box-extended disable >/dev/null 2>&1 || true
     fi
 else
-    # Установка из tar.gz или compressed
-    if [ "$IS_COMPRESSED" = "0" ]; then
-        # Обычный tar.gz архив
-        tar -xzf "$ARCHIVE_NAME" || fail "Не удалось распаковать tar.gz архив."
-        rm -f "$ARCHIVE_NAME"
-        BINARY_PATH=$(find . -type f -name sing-box | head -n 1)
-    else
-        # Это сжатый gzip бинарник (без tar)
-        # Распаковываем: входной файл .gz, выходной без суффикса
-        gzip -d "$ARCHIVE_NAME" || fail "Не удалось распаковать compressed бинарник."
-        # После распаковки файл называется sing-box-latest (т.е. без .gz)
-        UNCOMPRESSED_FILE="${ARCHIVE_NAME%.gz}"
-        if [ ! -f "$UNCOMPRESSED_FILE" ]; then
-            fail "Не найден распакованный бинарник."
-        fi
-        BINARY_PATH="$UNCOMPRESSED_FILE"
-    fi
+    tar -xzf "$ARCHIVE_NAME" || fail "Не удалось распаковать архив."
+    rm -f "$ARCHIVE_NAME"
 
-    if [ -z "$BINARY_PATH" ] || [ ! -f "$BINARY_PATH" ]; then
-        fail "Бинарник не найден после распаковки."
+    BINARY_PATH=$(find . -type f -name sing-box | head -n 1)
+    if [ -z "$BINARY_PATH" ]; then
+        fail "Бинарник не найден в архиве."
     fi
 
     mv -f "$BINARY_PATH" "$DEST_FILE" || fail "Не удалось заменить файл."
