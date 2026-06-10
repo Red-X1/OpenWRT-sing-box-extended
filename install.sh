@@ -133,7 +133,6 @@ fi
 
 SELECTED_VER=$(echo "$SELECTED_TAG" | sed 's/^v//')
 
-# --- НОВЫЙ БЛОК: Выбор типа сборки ---
 printf "\n${C}[?] Выберите тип сборки sing-box extended:${N}\n"
 printf "  ${Y}1)${N} Стандартная (Standard)\n"
 printf "  ${Y}2)${N} Сжатая (Compressed, UPX)\n"
@@ -142,11 +141,10 @@ read -r type_choice
 
 if [ "$type_choice" = "2" ]; then
     ARCH_SUFX="-compressed"
-    USE_PKG="0" # Сжатые сборки ставим бинарником через tar.gz, так как в ipk/apk их нет
+    USE_PKG="0"
 else
     ARCH_SUFX=""
 fi
-# -------------------------------------
 
 printf "\n${C}[*] Текущая: ${Y}${CURRENT_VER:-не установлен}${C} | Выбранная: ${Y}${SELECTED_VER}${N}\n"
 
@@ -175,7 +173,6 @@ if [ "$USE_PKG" = "1" ]; then
 fi
 
 if [ "$IS_PKG_INSTALL" = "0" ]; then
-    # Модифицированный паттерн для поддержки суффикса -compressed
     FILE_PATTERN="linux-$ARCH_SUFFIX${ARCH_SUFX}\.tar.gz"
     DOWNLOAD_URL=$(echo "$RELEASE_RESPONSE" \
       | tr ',' '\n' \
@@ -189,14 +186,21 @@ if [ -z "$DOWNLOAD_URL" ]; then
     fail "Файл для архитектуры '$HOST_ARCH' ($ARCH_SUFFIX${ARCH_SUFX} / ${DISTRIB_ARCH:-н/д}) не найден в релизе $SELECTED_TAG."
 fi
 
+# === ИЗМЕНЕНИЕ: Останавливаем службу ДО замеров памяти и скачивания ===
+printf "${Y}[*] Освобождаю оперативную память (остановка $SERVICE_NAME)...${N}\n"
+SERVICE_STOPPED="1"
+service "$SERVICE_NAME" stop 2>/dev/null || true
+sleep 2
+
+sync
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+# =====================================================================
+
 if [ "$IS_PKG_INSTALL" = "1" ]; then
     ARCHIVE_NAME="sing-box-latest.${PKG_EXT}"
 else
     ARCHIVE_NAME="sing-box-latest.tar.gz"
 fi
-
-sync
-echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 
 REQ_TEMP_KB=40960
 REQ_DEST_KB=25600
@@ -273,13 +277,6 @@ $DOWNLOAD "$ARCHIVE_NAME" "$DOWNLOAD_URL" || fail "Не удалось скач�
 if [ ! -s "$ARCHIVE_NAME" ]; then
     fail "Скачанный файл пустой."
 fi
-
-SERVICE_STOPPED="1"
-service "$SERVICE_NAME" stop 2>/dev/null || true
-sleep 2
-
-sync
-echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 
 if [ "$IS_PKG_INSTALL" = "1" ]; then
     if [ "$PKG_MANAGER" = "apk" ]; then
